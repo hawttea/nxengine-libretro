@@ -12,6 +12,8 @@
 void post_main();
 bool run_main();
 
+static bool use_audio_cb;
+
 void *retro_frame_buffer;
 unsigned retro_frame_buffer_width;
 unsigned retro_frame_buffer_height;
@@ -129,10 +131,34 @@ static void extract_directory(char *buf, const char *path, size_t size)
    }
 }
 
+static void audio_set_state(bool enable)
+{
+   (void)enable;
+}
+
+extern void mixaudio(int16_t *stream, size_t len_samples);
+
+static void audio_callback(void)
+{
+   static unsigned frame_cnt = 0;
+   frame_cnt++;
+   int16_t samples[(2 * 22050) / 60 + 1] = {0};
+
+   // Average audio frames / video frame: 367.5.
+   unsigned frames = (22050 + (frame_cnt & 1 ? 30 : -30)) / 60;
+
+   mixaudio(samples, frames * 2);
+   audio_batch_cb(samples, frames);
+}
+
 bool retro_load_game(const struct retro_game_info *game)
 {
+   struct retro_audio_callback cb = { audio_callback, audio_set_state };
    extract_directory(g_dir, game->path, sizeof(g_dir));
-   NX_LOG("g_dir: %s\n", g_dir);
+   if (log_cb)
+      log_cb(RETRO_LOG_INFO, "g_dir: %s\n", g_dir);
+
+   use_audio_cb = environ_cb(RETRO_ENVIRONMENT_SET_AUDIO_CALLBACK, &cb);
 
    if (pre_main())
       return 0;
@@ -151,7 +177,6 @@ void retro_reset(void)
 	game.reset();
 }
 
-void mixaudio(int16_t *stream, size_t len_samples);
 
 #if 0
 #include <time.h>
@@ -162,6 +187,7 @@ static int64_t get_usec(void)
    return (int64_t)tv.tv_sec * 1000000 + (int64_t)tv.tv_nsec / 1000;
 }
 #endif
+
 
 void retro_run(void)
 {
@@ -194,8 +220,6 @@ void retro_run(void)
       if (log_cb)
          log_cb(RETRO_LOG_INFO, "[NX]: total_time_frame_cb took %lld usec.\n", (long long)total_time_frame_cb);
 #endif
-
-      frame_cnt++;
    }
    else
    {
@@ -206,19 +230,12 @@ void retro_run(void)
       }
       else
          video_cb(NULL, SCREEN_WIDTH, SCREEN_HEIGHT, SCREEN_WIDTH * sizeof(uint16_t)); // Dupe every 6th frame.
-
-      frame_cnt++;
    }
 
-   int16_t samples[(2 * 22050) / 60 + 1] = {0};
-
-   // Average audio frames / video frame: 367.5.
-   unsigned frames = (22050 + (frame_cnt & 1 ? 30 : -30)) / 60;
-
-   mixaudio(samples, frames * 2);
-   audio_batch_cb(samples, frames);
-
    g_frame_cnt++;
+
+   if (!use_audio_cb)
+      audio_callback();
 
 #if 0
    int64_t total_time = get_usec() - start_time;
